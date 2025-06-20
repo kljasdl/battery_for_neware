@@ -4,7 +4,18 @@ import numpy as np
 import plotly.graph_objects as go
 import chardet
 from sklearn.linear_model import LinearRegression
-from scipy import integrate
+import io
+
+# 兼容不同scipy版本的积分函数
+try:
+    from scipy.integrate import trapz as scipy_trapz
+    SCIPY_TRAPZ_AVAILABLE = True
+except ImportError:
+    try:
+        from scipy.integrate import trapezoid as scipy_trapz
+        SCIPY_TRAPZ_AVAILABLE = True
+    except ImportError:
+        SCIPY_TRAPZ_AVAILABLE = False
 
 # 页面配置
 st.set_page_config(
@@ -16,7 +27,35 @@ st.set_page_config(
 
 
 # 生成不重复的高对比度颜色
-def generate_distinct_colors(n):
+def safe_trapz_integration(y, x):
+    """安全的梯形积分函数，兼容不同scipy版本"""
+    try:
+        if SCIPY_TRAPZ_AVAILABLE:
+            return scipy_trapz(y, x)
+        else:
+            # 使用numpy的梯形积分作为备选
+            return np.trapz(y, x)
+    except Exception as e:
+        # 如果以上都失败，使用自定义梯形积分
+        return custom_trapz_integration(y, x)
+
+
+def custom_trapz_integration(y, x):
+    """自定义梯形积分实现"""
+    try:
+        y = np.array(y)
+        x = np.array(x)
+        
+        if len(x) != len(y) or len(x) < 2:
+            return 0.0
+        
+        # 梯形积分公式: ∫f(x)dx ≈ Σ[(x[i+1]-x[i]) * (y[i+1]+y[i])/2]
+        dx = np.diff(x)
+        avg_y = (y[1:] + y[:-1]) / 2
+        return float(np.sum(dx * avg_y))
+    except Exception as e:
+        st.warning(f"积分计算出错: {e}")
+        return 0.0
     """生成n个不重复的高对比度颜色"""
     base_colors = [
         '#DC143C', '#228B22', '#4169E1', '#FF4500', '#9932CC', '#008B8B',
@@ -40,6 +79,63 @@ def detect_encoding(file_bytes):
         return result['encoding']
     except:
         return 'utf-8'
+
+
+def export_normalized_data(df, filename="normalized_gas_data.csv"):
+    """导出归一化数据为CSV格式"""
+    try:
+        # 准备导出数据
+        export_df = df.copy()
+        
+        # 选择要导出的列：时间列 + 所有强度列
+        time_cols = ['time_minutes_relative']
+        if 'Time' in export_df.columns:
+            time_cols.append('Time')
+        
+        intensity_cols = [col for col in export_df.columns if col.endswith('_intensity')]
+        
+        # 如果有基线校正数据，也包含进去
+        corrected_cols = [col for col in export_df.columns if col.endswith('_corrected')]
+        flattened_cols = [col for col in export_df.columns if col.endswith('_flattened')]
+        
+        # 构建导出列列表
+        export_cols = time_cols + intensity_cols + corrected_cols + flattened_cols
+        
+        # 过滤存在的列
+        export_cols = [col for col in export_cols if col in export_df.columns]
+        
+        # 创建导出数据框
+        final_export_df = export_df[export_cols].copy()
+        
+        # 重命名列以便更好理解
+        column_rename = {}
+        for col in final_export_df.columns:
+            if col == 'time_minutes_relative':
+                column_rename[col] = '时间_相对分钟'
+            elif col == 'Time':
+                column_rename[col] = '原始时间'
+            elif col.endswith('_intensity'):
+                gas_name = col.replace('_intensity', '')
+                column_rename[col] = f'{gas_name}_归一化强度'
+            elif col.endswith('_corrected'):
+                gas_name = col.replace('_corrected', '')
+                column_rename[col] = f'{gas_name}_基线校正'
+            elif col.endswith('_flattened'):
+                gas_name = col.replace('_flattened', '')
+                column_rename[col] = f'{gas_name}_拉平基线'
+        
+        final_export_df = final_export_df.rename(columns=column_rename)
+        
+        # 转换为CSV字符串
+        csv_buffer = io.StringIO()
+        final_export_df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+        csv_string = csv_buffer.getvalue()
+        
+        return csv_string, len(final_export_df), list(final_export_df.columns)
+        
+    except Exception as e:
+        st.error(f"导出数据时出错: {str(e)}")
+        return None, 0, []
 
 
 def process_gas_data(file_content, filename, ar_column_choice="自动选择"):
@@ -415,8 +511,9 @@ def calculate_gas_areas(df, gas_columns, integration_start_time=3):
                 try:
                     intensity_data = integration_df[corrected_col].values
 
-                    total_area = integrate.trapz(np.abs(intensity_data), time_data)
-                    net_area = integrate.trapz(intensity_data, time_data)
+                    # 使用兼容的积分函数
+                    total_area = safe_trapz_integration(np.abs(intensity_data), time_data)
+                    net_area = safe_trapz_integration(intensity_data, time_data)
 
                     results[gas] = {
                         'total_area': total_area,
@@ -511,6 +608,73 @@ def main():
         # 数据处理和分析
         if st.session_state.data is not None:
             df = st.session_state.data
+
+            # 数据导出功能
+            st.header("📥 数据导出")
+            
+            # 创建导出选项的列布局
+            export_col1, export_col2, export_col3 = st.columns(3)
+            
+            with export_col1:
+                st.subheader("📊 归一化数据导出")
+                
+                # 显示可导出的数据信息
+                intensity_cols = [col for col in df.columns if col.endswith('_intensity')]
+                st.info(f"可导出 {len(intensity_cols)} 种气体的归一化数据")
+                
+                if st.button("🔽 导出归一化数据", type="primary"):
+                    csv_data, row_count, columns = export_normalized_data(df)
+                    if csv_data:
+                        st.download_button(
+                            label="💾 下载归一化数据 (CSV)",
+                            data=csv_data,
+                            file_name=f"normalized_gas_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            mime="text/csv",
+                            key="download_normalized"
+                        )
+                        st.success(f"✅ 准备导出 {row_count} 行数据，包含 {len(columns)} 列")
+                        with st.expander("查看导出列信息"):
+                            st.write("**导出的列包括：**")
+                            for col in columns:
+                                st.write(f"• {col}")
+            
+            with export_col2:
+                if st.session_state.corrected_data is not None:
+                    st.subheader("📈 基线校正数据导出")
+                    corrected_df = st.session_state.corrected_data
+                    corrected_cols = [col for col in corrected_df.columns if col.endswith('_corrected')]
+                    st.info(f"可导出 {len(corrected_cols)} 种气体的校正数据")
+                    
+                    if st.button("🔽 导出校正数据", type="secondary"):
+                        csv_data, row_count, columns = export_normalized_data(corrected_df)
+                        if csv_data:
+                            st.download_button(
+                                label="💾 下载校正数据 (CSV)",
+                                data=csv_data,
+                                file_name=f"corrected_gas_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                                mime="text/csv",
+                                key="download_corrected"
+                            )
+                            st.success(f"✅ 准备导出 {row_count} 行校正数据")
+                else:
+                    st.subheader("📈 基线校正数据导出")
+                    st.info("请先执行基线校正")
+            
+            with export_col3:
+                st.subheader("📋 完整数据导出")
+                st.info("导出包含所有列的完整数据集")
+                
+                if st.button("🔽 导出完整数据", type="secondary"):
+                    # 导出完整数据
+                    full_csv = df.to_csv(index=False, encoding='utf-8-sig')
+                    st.download_button(
+                        label="💾 下载完整数据 (CSV)",
+                        data=full_csv,
+                        file_name=f"complete_gas_data_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        key="download_complete"
+                    )
+                    st.success(f"✅ 准备导出完整数据集 ({len(df)} 行 × {len(df.columns)} 列)")
 
             # 数据预览
             st.header("📊 数据预览")
@@ -769,8 +933,9 @@ def main():
                     st.download_button(
                         label="📥 下载分析报表 (CSV)",
                         data=csv,
-                        file_name="gas_analysis_report.csv",
-                        mime="text/csv"
+                        file_name=f"gas_analysis_report_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        mime="text/csv",
+                        key="download_analysis_report"
                     )
 
     except Exception as e:
