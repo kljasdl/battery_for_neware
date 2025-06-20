@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-import chardet
+
 from sklearn.linear_model import LinearRegression
 from scipy import integrate
 
