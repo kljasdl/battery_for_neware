@@ -27,6 +27,23 @@ st.set_page_config(
 
 
 # 生成不重复的高对比度颜色
+def generate_distinct_colors(n):
+    """生成n个不重复的高对比度颜色"""
+    base_colors = [
+        '#DC143C', '#228B22', '#4169E1', '#FF4500', '#9932CC', '#008B8B',
+        '#B22222', '#32CD32', '#1E90FF', '#FF6347', '#8A2BE2', '#00CED1',
+        '#CD5C5C', '#7CFC00', '#6495ED', '#FF8C00', '#9370DB', '#20B2AA',
+        '#F08080', '#98FB98', '#87CEEB', '#DDA0DD', '#90EE90', '#ADD8E6',
+        '#800000', '#008000', '#000080', '#800080', '#008080', '#804000'
+    ]
+
+    # 循环使用颜色
+    colors = []
+    for i in range(n):
+        colors.append(base_colors[i % len(base_colors)])
+    return colors
+
+
 def safe_trapz_integration(y, x):
     """安全的梯形积分函数，兼容不同scipy版本"""
     try:
