@@ -2,8 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-
-from sklearn.linear_model import LinearRegression
+import chardet
 from scipy import integrate
 
 # 页面配置
@@ -16,7 +15,33 @@ st.set_page_config(
 
 
 # 生成不重复的高对比度颜色
-def generate_distinct_colors(n):
+def linear_regression(x, y):
+    """使用numpy实现简单线性回归"""
+    try:
+        x = np.array(x).flatten()
+        y = np.array(y).flatten()
+        
+        # 计算斜率和截距
+        n = len(x)
+        sum_x = np.sum(x)
+        sum_y = np.sum(y)
+        sum_xy = np.sum(x * y)
+        sum_x2 = np.sum(x * x)
+        
+        # 斜率 = (n*Σxy - Σx*Σy) / (n*Σx² - (Σx)²)
+        slope = (n * sum_xy - sum_x * sum_y) / (n * sum_x2 - sum_x * sum_x)
+        
+        # 截距 = (Σy - slope*Σx) / n
+        intercept = (sum_y - slope * sum_x) / n
+        
+        return slope, intercept
+    except:
+        return 0, np.mean(y) if len(y) > 0 else 0
+
+
+def predict_linear(x, slope, intercept):
+    """根据线性回归参数预测值"""
+    return slope * np.array(x) + intercept
     """生成n个不重复的高对比度颜色"""
     base_colors = [
         '#DC143C', '#228B22', '#4169E1', '#FF4500', '#9932CC', '#008B8B',
@@ -358,22 +383,22 @@ def apply_baseline_correction(df, gas_columns, baseline_start_time=60, integrati
             gas_name = col.replace('_intensity', '')
 
             try:
-                baseline_time = baseline_data['time_minutes_relative'].values.reshape(-1, 1)
+                baseline_time = baseline_data['time_minutes_relative'].values
                 baseline_intensity = baseline_data[col].values
 
                 if len(baseline_time) >= 2:
-                    reg = LinearRegression()
-                    reg.fit(baseline_time, baseline_intensity)
+                    # 使用自定义线性回归
+                    slope, intercept = linear_regression(baseline_time, baseline_intensity)
 
-                    all_time = df_cleaned['time_minutes_relative'].values.reshape(-1, 1)
-                    baseline_values = reg.predict(all_time)
+                    all_time = df_cleaned['time_minutes_relative'].values
+                    baseline_values = predict_linear(all_time, slope, intercept)
 
                     corrected_df[f'{gas_name}_corrected'] = df_cleaned[col] - baseline_values
                     corrected_df[f'{gas_name}_flattened'] = df_cleaned[col] - baseline_values
 
                     baseline_info[gas_name] = {
-                        'slope': reg.coef_[0],
-                        'intercept': reg.intercept_,
+                        'slope': slope,
+                        'intercept': intercept,
                         'baseline_mean': baseline_intensity.mean(),
                         'baseline_std': baseline_intensity.std()
                     }
